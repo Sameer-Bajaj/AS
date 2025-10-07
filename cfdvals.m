@@ -28,7 +28,7 @@ sure you turn flight events off. This is designed to work w/ default
 imperical units in ORK.
 %}
 % Insert your file name below
-flight_info = readmatrix("cfddata.csv");
+flight_info = readmatrix("cfddataSDR.csv");
 % deletes rows after recovery
 flight_info = flight_info(flight_info(:,2) >= 0, :);
 % unit conversions
@@ -49,12 +49,13 @@ P_atm = flight_info(:,6);% (Pa)
 
 %% Rocket Properties
 % Change these based on rocket geometry
-fineness = 4; % Nosecone Fineness ratio
-OD = 8.375; % (inches)
-BT_length = 12.1; %boattail length
-body_len = 135.42; % in
+fineness = 5; % Nosecone Fineness ratio
+OD = 8.2; % (inches)
+BT_length = 12; %boattail length
+body_len = 135; % in
 len = fineness*OD+BT_length+body_len;
 len_m = len*in2m;
+mach_fineness = 0.5;
 
 %% Fluid properties
 % gamma is the c_p / c_v, it is called k in 105a
@@ -87,14 +88,14 @@ tau_w = C_f.*(rho/2.*(u_inf.^2));
 % rigorously, don't use any wall treatment
 %
 % y+ < 5: you are in the viscous layer, and we approximate using a linear 
-% equation. dont go past y+ = 5
+% equation. 
 %
 % y+ < 30: in the buffer layer, less accurate but faster, use y+ = 25 if
 % you get a low min orthogonal quality
 
-y_plus = 5;
+y_plus = 3;
 % r is your growth rate (usually 1.0-1.5)
-r = 1.3;
+r = 1.2;
 
 
 % wall friction velocity
@@ -108,7 +109,7 @@ y = 2*y_plus*v./u_tau;
 % boundary layer height = y*((1-r^N)/(1-r)).
 height_BL = 0.382*len_m./(Re_L.^0.2);
 N = log(1-(1-r).*height_BL./y)/log(r);
-
+turb_intensity = 0.16*Re_L.^(-1/8)*100;
 %% Plot Results
 figure;
 grid on; hold on;
@@ -124,16 +125,38 @@ plot(altitude, N, 'Color', [255 209 0]/255, 'LineWidth', 1, ...
 ylabel('Number of Cells', 'Color', [0 0 0])
 title('y and N vs Altitude')
 legend('Layer Height', 'Cell Count')
+%Find max mach value
+max_mach = max(mach);
+num_machs = floor(max_mach/mach_fineness);
+mach_array = {};
+for i = 1:num_machs
+    mach_idx(i) = find(mach > mach_fineness*(i), 1, 'first');
+    mach_array{i} = sprintf('Mach %.2f', mach(mach_idx(i)));
+end
+mach_string = strjoin(mach_array, '\t');
+P_string = strjoin(string(P_atm(mach_idx)), '\t');
+alt_string = strjoin(string(altitude(mach_idx)), '\t');
+T_string = strjoin(string(T_atm(mach_idx)), '\t');
+mu_string = strjoin(string(mu(mach_idx)), '\t');
+rho_string = strjoin(string(rho(mach_idx)), '\t');
+v_string = strjoin(string(u_inf(mach_idx)), '\t');
+Re_string = strjoin(string(Re_L(mach_idx)), '\t');
+Re_cutoff_string = strjoin(string(Re_cutoff(mach_idx)), '\t');
+Cf_string = strjoin(string(C_f(mach_idx)), '\t');
+tau_w_str = strjoin(string(tau_w(mach_idx)), '\t');
+u_tau_str = strjoin(string(u_tau(mach_idx)), '\t');
+%% Build CFD Input Strings
+y1_array = string(y(mach_idx));
+y1_string = strjoin(y1_array, '\t');
 
+delta_array = string(height_BL(mach_idx));
+delta_string = strjoin(delta_array, '\t');
+
+N_array = string(ceil(N(mach_idx)));
+N_string = strjoin(N_array, '\t');
+turb_array = string(turb_intensity(mach_idx));
+turb_string = strjoin(turb_array, '\t');
 %% Output values
-[min_y_val, min_index] = min(y);
-p25 = prctile(y, 25); 
-p50 = prctile(y, 50);
-[y_new, indices] = sort(y);
-i25 = find(y_new >= p25, 1, 'first');
-i50 = find(y_new >= p50, 1, 'first');
-index_25 = indices(i25); index_50 = indices(i50);
-
 output_table = {};
 output_table{end + 1} = 'Rocket Geometry';
 output_table{end + 1} = sprintf('OD\t%.1f\tin', OD);
@@ -141,42 +164,48 @@ output_table{end + 1} = sprintf('Length\t%.2f\tin', len);
 output_table{end + 1} = sprintf('NC Fineness\t%.1f', fineness);
 output_table{end + 1} = ' ';
 
-output_table{end + 1} = 'Atmospheric Conditions (min, 25th, 50th y)';
-output_table{end + 1} = sprintf('Altitude\t%.1f\t%.1f\t%.1f\tm', altitude(min_index), altitude(index_25), altitude(index_50));
-output_table{end + 1} = sprintf('\t%.1f\t%.1f\t%.1f\tft', altitude(min_index)/ft2m, altitude(index_25)/ft2m, altitude(index_50)/ft2m);
-output_table{end + 1} = sprintf('P_atm\t%.2E\t%.2E\t%.2E\tPa', P_atm(min_index), P_atm(index_25), P_atm(index_50));
-output_table{end + 1} = sprintf('T_atm\t%.2f\t%.2f\t%.2f\tK', T_atm(min_index), T_atm(index_25), T_atm(index_50));
-output_table{end + 1} = sprintf('mu\t%.2E\t%.2E\t%.2E\tPa*s', mu(min_index), mu(index_25), mu(index_50));
-output_table{end + 1} = sprintf('rho\t%.2f\t%.2f\t%.2f\tkg/m^3', rho(min_index), rho(index_25), rho(index_50));
+% --- Conditions Row ---
+output_table{end + 1} = sprintf('Conditions\t%s', mach_string);
 output_table{end + 1} = ' ';
 
-output_table{end + 1} = 'Flow Properties (min, 25th, 50th y)';
-output_table{end + 1} = sprintf('u_inf\t%.2f\t%.2f\t%.2f\tm/s', u_inf(min_index), u_inf(index_25), u_inf(index_50));
-output_table{end + 1} = sprintf('Mach\t%.2f\t%.2f\t%.2f', mach(min_index), mach(index_25), mach(index_50));
-output_table{end + 1} = sprintf('Re_L\t%.2E\t%.2E\t%.2E', Re_L(min_index), Re_L(index_25), Re_L(index_50));
-output_table{end + 1} = sprintf('Re_cutoff\t%.2E\t%.2E\t%.2E', Re_cutoff(min_index), Re_cutoff(index_25), Re_cutoff(index_50));
-output_table{end + 1} = sprintf('Cf\t%.8E\t%.8E\t%.8E', C_f(min_index), C_f(index_25), C_f(index_50));
-output_table{end + 1} = sprintf('tau_w\t%.2f\t%.2f\t%.2f\tPa', tau_w(min_index), tau_w(index_25), tau_w(index_50));
-output_table{end + 1} = sprintf('u_tau\t%.3f\t%.3f\t%.3f\tm/s', u_tau(min_index), u_tau(index_25), u_tau(index_50));
+% --- Atmospheric Properties ---
+output_table{end + 1} = 'Atmospheric';
+output_table{end + 1} = sprintf('Altitude\t%s\tm', alt_string);
+output_table{end + 1} = sprintf('P_atm\t%s\tPa', P_string);
+output_table{end + 1} = sprintf('T_atm\t%s\tK', T_string);
+output_table{end + 1} = sprintf('mu\t%s\tPa*s', mu_string);
+output_table{end + 1} = sprintf('rho\t%s\tkg/m^3', rho_string);
 output_table{end + 1} = ' ';
 
+% --- Flow Properties ---
+output_table{end + 1} = 'Flow Properties';
+output_table{end + 1} = sprintf('u_inf\t%s\tm/s', v_string);
+output_table{end + 1} = sprintf('Re_L\t%s', Re_string);
+output_table{end + 1} = sprintf('Re_cutoff\t%s', Re_cutoff_string);
+output_table{end + 1} = sprintf('Cf\t%s', Cf_string);
+output_table{end + 1} = sprintf('tau_w\t%s\tPa', tau_w_str);
+output_table{end + 1} = sprintf('u_tau\t%s\tm/s', u_tau_str);
+output_table{end + 1} = ' ';
+
+% --- CFD Input Values ---
 output_table{end + 1} = 'CFD Input Values';
-output_table{end + 1} = sprintf('Y+\t%.1f', y_plus);
-output_table{end + 1} = sprintf('r\t%.2f', r);
-output_table{end + 1} = sprintf('y1\t%.8E\t%.8E\t%.8E\tm', ...
-    min_y_val, p25, p50);
-output_table{end + 1} = sprintf('delta\t%.8E\t%.8E\t%.8E\tm', ...
-    height_BL(min_index), height_BL(index_25), height_BL(index_50));
-output_table{end + 1} = sprintf('N\t%d\t%d\t%d', ceil(N(min_index)), ceil(N(index_25)), ceil(N(index_50)));
+output_table{end + 1} = sprintf('Y+\t%.1f', y_plus);   % constant
+output_table{end + 1} = sprintf('r\t%.2f', r);         % constant
+output_table{end + 1} = sprintf('y1\t%s\tm', y1_string);
+output_table{end + 1} = sprintf('delta\t%s\tm', delta_string);
+output_table{end + 1} = sprintf('N\t%s', N_string);
+output_table{end + 1} = sprintf('Turbulent Intensity: \t%s\t%%', turb_string);
 output_table{end + 1} = ' ';
 
+% --- Constants ---
 output_table{end + 1} = sprintf('NC Area\t%.7E\tm^2', pi*OD^2/4*in2m^2);
 output_table{end + 1} = sprintf('Length\t%.2f\tm', len_m);
 output_table{end + 1} = sprintf('C1: Ref Viscosity\t%.5E\tkg/m^3', u_0);
 output_table{end + 1} = sprintf('C2: Ref Temp\t%.2f\tK', T_0);
 output_table{end + 1} = sprintf('C3: Sutherland''s Constant\t%.2f', S);
-output_table{end + 1} = sprintf('Velocity\t%.2f\t%.2f\t%.2f\tm/s', u_inf(min_index), u_inf(index_25), u_inf(index_50));
-output_table{end + 1} = sprintf('Viscosity\t%.2E\t%.2E\t%.2E\tPa*s', mu(min_index), mu(index_25), mu(index_50));
+output_table{end + 1} = ' ';
+
+
 
 final_output = strjoin(output_table, '\n');
 clipboard('copy', final_output);
